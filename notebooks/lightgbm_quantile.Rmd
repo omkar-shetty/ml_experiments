@@ -1,0 +1,134 @@
+---
+title: 'quantile regression with lightgbm : trial'
+output:
+  html_document:
+    df_print: paged
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r, echo=FALSE}
+library(lightgbm)
+library(datasets)
+library(mlbench)
+library(data.table)
+library(Matrix)
+library(ggplot2)
+```
+
+Loading a dataset to build a model
+
+```{r}
+data(BostonHousing)
+BostonHousing <- setDT(BostonHousing)
+
+head(BostonHousing)
+```
+```{r}
+# Specifying a config
+
+config <- list(
+  N_samp = 450
+  ,feats_to_include = c('crim','age','dis','b','nox','rm','tax','ptratio')
+  
+)
+```
+
+Splitting into train and test
+
+```{r}
+set.seed(123)
+train_id <- sample(x = nrow(BostonHousing), size = config$N_samp, replace = F)
+train_dat <- BostonHousing[train_id]
+test_dat <- BostonHousing[!train_id]
+
+```
+
+Prepping the dataset
+
+```{r}
+
+train_sparse = Matrix(as.matrix(train_dat[,config$feats_to_include, with=F]), sparse=TRUE)
+test_sparse = Matrix(as.matrix(test_dat[,config$feats_to_include, with=F]), sparse=TRUE)
+
+y_train  =  train_dat$medv
+
+lgb.train = lgb.Dataset(data=train_sparse, label=y_train)
+
+```
+SEtting up the model
+
+```{r}
+lgb.grid = list(objective = "regression",
+                metric = "rmse")
+
+
+lgb.model = lgb.train(params = lgb.grid, 
+                      data = lgb.train,  
+                      nrounds = 500,
+                      eval_freq = 20)
+
+test_dat[,lgb_pred := predict(lgb.model,test_sparse)]
+
+test_dat[,Metrics::rmse(actual = medv, predicted = lgb_pred)]
+```
+
+Adding some plots
+
+```{r}
+ggplot(data = test_dat, aes(x = 1:nrow(test_dat), y = lgb_pred)) +
+  geom_point()
+```
+
+Attempt Quantile Regression
+
+```{r}
+lgb_quant_grid5 = list(objective = "quantile",
+               alpha = 0.05)
+
+
+lgb.quant5 = lgb.train(params = lgb_quant_grid5, 
+                      data = lgb.train,  
+                      nrounds = 500,
+                      eval_freq = 20)
+
+test_dat[,lgb_5 := predict(lgb.quant5,test_sparse)]
+
+##### Predict median
+
+lgb_quant_grid50 = list(objective = "quantile",
+               alpha = 0.5)
+
+
+lgb.quant50 = lgb.train(params = lgb_quant_grid50, 
+                      data = lgb.train,  
+                      nrounds = 500,
+                      eval_freq = 20)
+
+test_dat[,lgb_50 := predict(lgb.quant50,test_sparse)]
+
+##### Predict 95th percentile
+
+lgb_quant_grid95 = list(objective = "quantile",
+               alpha = 0.95)
+
+
+lgb.quant95 = lgb.train(params = lgb_quant_grid95, 
+                      data = lgb.train,  
+                      nrounds = 500,
+                      eval_freq = 20)
+
+test_dat[,lgb_95 := predict(lgb.quant95,test_sparse)]
+
+```
+Now for some plots
+
+```{r}
+ggplot(data = test_dat, aes(x = 1:nrow(test_dat))) +
+  geom_point(aes(y = lgb_50)) +
+  geom_point(aes(y = medv), color = 'red') +
+  geom_errorbar(aes(ymin=lgb_5, ymax=lgb_95))
+```
+
