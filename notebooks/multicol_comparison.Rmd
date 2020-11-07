@@ -180,8 +180,8 @@ Build an xgboost model
 
 feats <- c('feat_a','feat_b','feat_c')
 
-train_mat <- data.matrix(train_dat[,..feats,with = F])
-test_mat <- data.matrix(test_dat[,..feats,with = F])
+train_mat <- data.matrix(train_dat[,..feats])
+test_mat <- data.matrix(test_dat[,..feats])
 
 fit <- xgboost::xgboost(data = train_mat,
                         label = train_dat$y_act,

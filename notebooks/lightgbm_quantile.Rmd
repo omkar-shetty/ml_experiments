@@ -5,9 +5,7 @@ output:
     df_print: paged
 ---
 
-This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
-
-Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+The objective is to explore the lightgbm package particularly with respect to quantile regression
 
 ```{r, echo=FALSE}
 library(lightgbm)
@@ -68,7 +66,7 @@ lgb.grid = list(objective = "regression",
 lgb.model = lgb.train(params = lgb.grid, 
                       data = lgb.train,  
                       nrounds = 500,
-                      eval_freq = 20)
+                      verbosity = -1)
 
 test_dat[,lgb_pred := predict(lgb.model,test_sparse)]
 
@@ -92,7 +90,8 @@ lgb_quant_grid5 = list(objective = "quantile",
 lgb.quant5 = lgb.train(params = lgb_quant_grid5, 
                       data = lgb.train,  
                       nrounds = 500,
-                      eval_freq = 20)
+                      eval_freq = 20,
+                      verbosity = -1)
 
 test_dat[,lgb_5 := predict(lgb.quant5,test_sparse)]
 
@@ -105,7 +104,8 @@ lgb_quant_grid50 = list(objective = "quantile",
 lgb.quant50 = lgb.train(params = lgb_quant_grid50, 
                       data = lgb.train,  
                       nrounds = 500,
-                      eval_freq = 20)
+                      eval_freq = 20,
+                      verbosity = -1)
 
 test_dat[,lgb_50 := predict(lgb.quant50,test_sparse)]
 
@@ -118,7 +118,8 @@ lgb_quant_grid95 = list(objective = "quantile",
 lgb.quant95 = lgb.train(params = lgb_quant_grid95, 
                       data = lgb.train,  
                       nrounds = 500,
-                      eval_freq = 20)
+                      eval_freq = 20,
+                      verbosity = -1)
 
 test_dat[,lgb_95 := predict(lgb.quant95,test_sparse)]
 

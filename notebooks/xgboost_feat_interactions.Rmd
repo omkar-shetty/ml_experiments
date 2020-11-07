@@ -1,0 +1,234 @@
+---
+title: "Understanding Feature Interactions in XGBoost"
+author: "Omkar Shetty"
+date: "07/11/2020"
+output:
+  html_document:
+    df_print: paged
+---
+
+## Background
+While building a ML model, it is common to come across features at different levels of granularity. For instance, in the retail world, it is pretty common to build models that generate predictions for each product in a store for each day (also known as an item-location-day granularity) - examples include sales predictions, predicting on-shelf availability etc. 
+However, sometimes it is observed that features of a different granularity (location based features such as store size or location-day features like total sales for a day) end up as top features in the feature importance - which at face value can be difficult to understand, since a large number of rows would have the same value. 
+
+So the question now (at least for me) is that is this due to some feature interactions that the model is capturing implicitly.
+
+## Objective
+The goal of this notebook is to understand how xgboost handles feature interactions (and a secondary question is to understand if it is better to capture feature interactions explicitly and separately or it doesn't really a big difference)
+
+
+
+```{r, echo=FALSE}
+
+rm(list = ls()); gc(); cat('\f');
+
+suppressMessages(library(dplyr))
+suppressMessages(library(xgboost))
+suppressMessages(library(data.table))
+suppressMessages(library(ggplot2))
+suppressMessages(library(pROC))
+suppressMessages(library(DiagrammeR))
+
+```
+
+## Simulation Example
+
+We start by defining a config for our simulation dataset. This will also include the parameters of the xgboost model to be built.
+
+```{r}
+
+config <- list(
+   N = 1e6                  # no of rows in the dataset
+  ,train_perc = 0.7         # % of dataset to be used for training the model
+  ,x1_vals = c(50,100,150)  # pool of possible values to draw from
+  ,seed = 7112020     
+)
+
+```
+
+### Creating the dataset
+
+```{r}
+
+set.seed(config$seed)
+
+ttl_dat <- data.table(
+   x1 = sample(x = config$x1_vals,size = config$N, replace = T)       # less granular feature, assumed common for a large no of rows
+  ,x2 = runif(n = config$N, min = 0, max = 10)       # more granular feature       
+  ,x3 = rnorm(n = config$N, mean = 10, sd = 10)      # 3rd feature, shoudn't directly impact y
+)
+
+# Specifying dependent variable
+
+ttl_dat[,y := dplyr::case_when( x1 == 50 & x2 <= 4 ~ 1,
+                                x1 == 150 & x2 <8 ~ 1,
+                                TRUE ~ 0)]
+
+```
+
+Note that the feature x3 is specifically not used for defining the dependent variable.
+
+### Pre-processing the data
+
+Here we split the data into train and test and set it up to be used for training an xgboost model.
+
+```{r}
+
+train_ids <- sample(x = nrow(ttl_dat), size = floor(nrow(ttl_dat)*config$train_perc), replace = F)
+
+train_dat <- ttl_dat[train_ids]
+test_dat <- ttl_dat[!train_ids]
+
+feats <- c('x1','x2','x3')
+
+train_mat <- data.matrix(train_dat[,..feats])
+test_mat <- data.matrix(test_dat[,..feats])
+
+
+```
+
+
+### Building an xgboost model
+
+Here we make a simple xgboost model (for this example we mostly use out of the box parameters)
+
+```{r}
+
+fit <- xgboost::xgboost(data = train_mat,
+                        objective = "binary:logistic",
+                        label = train_dat$y,
+                        nrounds = 500,
+                        early_stopping_rounds = 20,
+                        verbose = 0)
+
+# How 'good' is the model ?
+
+test_dat[,xgb_pred := predict(object = fit, newdata = test_mat)]
+
+test_dat[,Metrics::auc(actual = y, predicted = xgb_pred)]
+
+
+```
+
+```{r}
+pROC::roc(test_dat$y, test_dat$xgb_pred, plot = T)
+
+```
+
+
+The model seems to be capturing the behaviour perfectly as seen by the ROC curve and the associated AUC value (hardly surprising). 
+
+```{r}
+xgb.plot.importance(xgb.importance(model = fit))
+
+```
+
+Looking at the feature importance plot, a couple of key takeaways for me :
+1. It is possible to get a less granular feautr be the most important while predicting a more granular response variable
+2. Although it may be possible, it may not always be likely - in this example, the definition of the response variable had to be tweaked (a couple of times) to ensure that the feature x1 was called out as more important than x2.
+3. To no one's surprise, feature x3 is completely discarded by the model.
+
+### What does the model tree plot looks like
+
+To verify that the model is indeed capturing the feature interaction, we plot one of the trees 
+NOTE : Based on the documentation, it seems more appropriate to use xgb.plot.multi.trees, however I was unable to represent the model the way I wanted to. So using a single tree depiction (which given the simplicity of the model shouldn't be too bad)                                                                                                                                                                                                                             
+
+```{r}
+xgb.plot.tree(feature_names = c('x1','x2'), model = fit,trees = 20)
+
+```
+
+As can be seen from the plot, the model seems to be capturing the interaction pretty accurately.
+
+So far so good !
+
+Finally, to avoid questions around feature selection, can we explicitly specify an interaction term in the model definition ?
+
+## Interaction Feature
+
+```{r}
+
+# Defining a new interaction feature - which will now be different for different rows
+# This may or may not have an interpretaion by itself
+
+train_dat[,int_x := x1*x2]
+test_dat[,int_x := x1*x2]
+
+# THe previous feature x1 will now be replaced with int_x to rebuild the model.
+
+feats_alt <- c('int_x','x2')
+
+train_mat_alt <- data.matrix(train_dat[,..feats_alt])
+test_mat_alt <- data.matrix(test_dat[,..feats_alt])
+
+```
+
+### Re-building a model
+
+```{r}
+fit_alt <- xgboost::xgboost(data = train_mat_alt,
+                        objective = "binary:logistic",
+                        label = train_dat$y,
+                        nrounds = 500,
+                        early_stopping_rounds = 20,
+                        verbose = 0)
+
+# How 'good' is the model ?
+
+test_dat[,xgb_pred_alt := predict(object = fit_alt, newdata = test_mat_alt)]
+
+test_dat[,Metrics::auc(actual = y, predicted = xgb_pred_alt)]
+
+
+```
+
+```{r}
+xgb.plot.importance(xgb.importance(model = fit_alt))
+
+```
+
+The feature importance now changes to show x2 as the more dominant feature (although again the callout is that the model performance itself remain unchanged)
+
+```{r}
+test_dat[,.N,.(xgb_pred > 0.5,xgb_pred_alt> 0.5)]
+```
+
+For the vast majority of cases, the two models are in agreement with each other. For kicks, we look at the miniscule number of rows where the predictions dont match.
+
+```{r}
+test_dat[(xgb_pred < 0.5 & xgb_pred_alt > 0.5) | (xgb_pred > 0.5 & xgb_pred_alt < 0.5), ]
+```
+Interestingly, in all 6 cases here the 1st model ends up being more accurate than the 2nd one.
+
+
+Can we plot the new model, similar to the first one ?
+
+```{r}
+xgb.plot.tree(feature_names = c('x2','int_x'), model = fit_alt,trees = 20)
+
+```
+
+We can, but it doesnt look as easily interpretable (compared to the first model)
+
+## Comparing the prediction scores from the model itself
+
+Does the different setup of the model impact the distribution of scores ?
+
+```{r}
+
+test_m <- melt(data = test_dat, id.vars = c('x1','x2','int_x'), measure.vars = c('xgb_pred','xgb_pred_alt'),
+               variable.name = 'model',value.name = 'prediction')
+
+ggplot(data = test_m) +
+  geom_density(aes(x = prediction, fill = model), alpha = 0.6) +
+  labs(x = 'prediction score') +
+  theme_minimal()
+```
+
+The scores themselves do seem to be impacted - with the model based on the interaction feature having a wider separation between the prediction classes. This property might be useful in a more complex scenario - however for this example, the gap doesnt really matter as much since a threshold of 0.5 provides a pretty clean split between the classes.
+
+## Conclusion
+
+The conclusions and take-aways for me :
+1. The feature importance by itself might not provide a complete picture. Although x1 was a key feature in our first model, it was only the interaction with the x2 feature that gave it the predictive power.
+2. If we are not comfortable with using low granularity features directly, there is always an option of deriving secondary features. From these examples at least, the model didnt really suffer from a major loss of predictive power.
